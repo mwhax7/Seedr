@@ -161,6 +161,8 @@ export interface AppConfig {
 
 // ── Runtime types ──
 
+export type CompletionReason = 'ratio_reached' | 'manual' | undefined;
+
 export interface TorrentRuntimeState {
   meta: TorrentMeta;
   seedState: TorrentSeedState;
@@ -177,6 +179,7 @@ export interface TorrentRuntimeState {
   active: boolean; // in active slot (selected for seeding)
   seeding: boolean; // at least one successful announce — actually seeding
   completed: boolean; // upload ratio target reached — still announces but no bandwidth
+  completionReason?: CompletionReason; // why the torrent was marked as completed
   lastFailureTransient: boolean; // last announce failure was transient and is on a short retry path
 }
 

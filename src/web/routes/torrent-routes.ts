@@ -86,4 +86,76 @@ export function registerTorrentRoutes(server: FastifyInstance, seedManager: Seed
       return { success: true };
     }
   );
+
+  // Pause a torrent
+  server.post<{ Params: { infoHash: string } }>(
+    '/api/torrents/:infoHash/pause',
+    async (request, reply) => {
+      const { infoHash } = request.params;
+      if (!INFO_HASH_RE.test(infoHash)) {
+        return reply.status(400).send({ error: 'Invalid infoHash format' });
+      }
+
+      const ok = await seedManager.pauseTorrent(infoHash);
+      if (!ok) {
+        return reply.status(404).send({ error: 'Torrent not found or already paused' });
+      }
+
+      return { success: true };
+    }
+  );
+
+  // Resume a paused torrent
+  server.post<{ Params: { infoHash: string } }>(
+    '/api/torrents/:infoHash/resume',
+    async (request, reply) => {
+      const { infoHash } = request.params;
+      if (!INFO_HASH_RE.test(infoHash)) {
+        return reply.status(400).send({ error: 'Invalid infoHash format' });
+      }
+
+      const ok = await seedManager.resumeTorrent(infoHash);
+      if (!ok) {
+        return reply.status(404).send({ error: 'Torrent not found or already active' });
+      }
+
+      return { success: true };
+    }
+  );
+
+  // Mark torrent as manually completed
+  server.post<{ Params: { infoHash: string } }>(
+    '/api/torrents/:infoHash/mark-completed',
+    async (request, reply) => {
+      const { infoHash } = request.params;
+      if (!INFO_HASH_RE.test(infoHash)) {
+        return reply.status(400).send({ error: 'Invalid infoHash format' });
+      }
+
+      const ok = await seedManager.markTorrentCompleted(infoHash, 'manual');
+      if (!ok) {
+        return reply.status(404).send({ error: 'Torrent not found or already completed' });
+      }
+
+      return { success: true };
+    }
+  );
+
+  // Unmark a manually completed torrent
+  server.post<{ Params: { infoHash: string } }>(
+    '/api/torrents/:infoHash/unmark-completed',
+    async (request, reply) => {
+      const { infoHash } = request.params;
+      if (!INFO_HASH_RE.test(infoHash)) {
+        return reply.status(400).send({ error: 'Invalid infoHash format' });
+      }
+
+      const ok = await seedManager.unmarkTorrentCompleted(infoHash);
+      if (!ok) {
+        return reply.status(404).send({ error: 'Torrent not found or not manually completed' });
+      }
+
+      return { success: true };
+    }
+  );
 }
