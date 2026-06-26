@@ -1,5 +1,5 @@
 import { EventEmitter } from 'node:events';
-import { readdirSync, existsSync } from 'node:fs';
+import { readdirSync, existsSync, unlinkSync } from 'node:fs';
 import { join, basename } from 'node:path';
 import { watch as chokidarWatch, type FSWatcher } from 'chokidar';
 import {
@@ -19,6 +19,7 @@ import type {
   SeedrStatus,
   AnnounceEvent,
   ClientProfile,
+  CompletionReason,
 } from '../config/types.js';
 import { parseTorrentFile, infoHashToHex } from './torrent-parser.js';
 import { loadClientProfile, generateKey, generatePeerId, type EmulatorState } from './client-emulator.js';
@@ -104,8 +105,11 @@ export class SeedManager extends EventEmitter {
       torrent.lastEvent = '' as AnnounceEvent;
       torrent.consecutiveFailures = 0;
       torrent.lastFailureTransient = false;
-      // Re-evaluate completed (ratio may still be met from persisted state)
+      // ✅ FIX: Re-evaluate completed (ratio may still be met from persisted state)
       torrent.completed = this.hasReachedRatioTarget(torrent);
+      if (torrent.completed && !torrent.completionReason) {
+        torrent.completionReason = 'ratio_reached';
+      }
     }
 
     // Recompute slot assignment before any timers or network activity start.
@@ -333,6 +337,7 @@ export class SeedManager extends EventEmitter {
         lastKeyRefresh: Date.now(),
       };
 
+      // ✅ FIX: Check ratio target on load
       const runtimeState: TorrentRuntimeState = {
         meta,
         seedState,
@@ -348,7 +353,8 @@ export class SeedManager extends EventEmitter {
         lastEvent: '' as AnnounceEvent,
         active,
         seeding: false, // Not seeding until first successful announce
-        completed: false, // Set when upload ratio target is reached
+        completed: this.hasReachedRatioTarget({ ...{ meta, seedState, peerId, key, currentTracker: meta.trackers[0] || '', trackerIndex: 0, interval: 1800, seeders: 0, leechers: 0, consecutiveFailures: 0, announceCount: seedState.announceCount, lastEvent: '' as AnnounceEvent, active, seeding: false, completed: false, lastFailureTransient: false } as TorrentRuntimeState }),
+        completionReason: this.hasReachedRatioTarget({ ...{ meta, seedState, peerId, key, currentTracker: meta.trackers[0] || '', trackerIndex: 0, interval: 1800, seeders: 0, leechers: 0, consecutiveFailures: 0, announceCount: seedState.announceCount, lastEvent: '' as AnnounceEvent, active, seeding: false, completed: false, lastFailureTransient: false } as TorrentRuntimeState }) ? 'ratio_reached' : undefined,
         lastFailureTransient: false,
       };
 
@@ -399,6 +405,15 @@ export class SeedManager extends EventEmitter {
     this.announceLocks.delete(infoHash);
     this.activatedAt.delete(infoHash);
     delete this.state.torrents[infoHash];
+
+    // ✅ IMPROVEMENT: Delete the .torrent file from disk
+    try {
+      unlinkSync(torrent.meta.filePath);
+      logger.info({ name: torrent.meta.name }, 'Torrent file deleted from disk');
+    } catch (err) {
+      logger.warn({ name: torrent.meta.name, error: err }, 'Failed to delete .torrent file');
+      // Continue even if the deletion fails (permissions, etc.)
+    }
 
     this.emit('torrent:removed', { infoHash });
     logger.info({ name: torrent.meta.name }, 'Torrent removed');
@@ -484,6 +499,7 @@ export class SeedManager extends EventEmitter {
       // Check upload ratio target — mark completed (still announces, no bandwidth)
       if (this.hasReachedRatioTarget(torrent) && !torrent.completed) {
         torrent.completed = true;
+        torrent.completionReason = 'ratio_reached';
         logger.info({ name: torrent.meta.name }, 'Upload ratio target reached');
         this.emit('torrent:completed', { infoHash, name: torrent.meta.name });
 
@@ -831,6 +847,7 @@ export class SeedManager extends EventEmitter {
         const completed = this.hasReachedRatioTarget(torrent);
         if (torrent.completed !== completed) {
           torrent.completed = completed;
+          torrent.completionReason = completed ? 'ratio_reached' : undefined;
           logger.info(
             { name: torrent.meta.name, completed },
             completed ? 'Torrent completed by ratio target update' : 'Torrent un-completed by ratio target update'
@@ -943,6 +960,94 @@ export class SeedManager extends EventEmitter {
     const event = torrent.lastEvent === '' || torrent.lastEvent === 'stopped' ? 'started' as const : '' as const;
     await this.announceForTorrent(infoHash, event);
     return true;
+  }
+
+  /**
+   * Pause a torrent (deactivate without completion)
+   */
+  async pauseTorrent(infoHash: string): Promise<boolean> {
+    if (!this.running) return false;
+    const torrent = this.torrents.get(infoHash);
+    if (!torrent || !torrent.active) return false;
+
+    this.deactivateTorrent(infoHash);
+    this.emit('torrent:paused', { infoHash, name: torrent.meta.name });
+    logger.info({ name: torrent.meta.name }, 'Torrent paused');
+    return true;
+  }
+
+  /**
+   * Resume a paused torrent
+   */
+  async resumeTorrent(infoHash: string): Promise<boolean> {
+    if (!this.running) return false;
+    const torrent = this.torrents.get(infoHash);
+    if (!torrent || torrent.active || torrent.completed) return false;
+
+    this.activateTorrent(infoHash);
+    this.emit('torrent:resumed', { infoHash, name: torrent.meta.name });
+    logger.info({ name: torrent.meta.name }, 'Torrent resumed');
+    return true;
+  }
+
+  /**
+   * Mark torrent as manually completed (stops upload reporting)
+   */
+  async markTorrentCompleted(infoHash: string, reason: CompletionReason = 'manual'): Promise<boolean> {
+    if (!this.running) return false;
+    const torrent = this.torrents.get(infoHash);
+    if (!torrent) return false;
+
+    if (!torrent.completed) {
+      torrent.completed = true;
+      torrent.completionReason = reason;
+
+      // If it was an active torrent, free its slot
+      if (torrent.active && this.config.simultaneousSeed !== -1) {
+        this.freeCompletedSlot(infoHash);
+      }
+
+      // Send stopped announce if seeding
+      if (torrent.seeding) {
+        await this.announceForTorrent(infoHash, 'stopped').catch(() => {});
+      }
+
+      this.emit('torrent:manually_completed', {
+        infoHash,
+        name: torrent.meta.name,
+        reason,
+      });
+
+      logger.info({ name: torrent.meta.name, reason }, 'Torrent manually completed');
+      return true;
+    }
+
+    return false;
+  }
+
+  /**
+   * Unmark a manually completed torrent
+   */
+  async unmarkTorrentCompleted(infoHash: string): Promise<boolean> {
+    if (!this.running) return false;
+    const torrent = this.torrents.get(infoHash);
+    if (!torrent) return false;
+
+    if (torrent.completed && torrent.completionReason === 'manual') {
+      torrent.completed = false;
+      torrent.completionReason = undefined;
+
+      // Reactivate the torrent
+      if (!torrent.active) {
+        this.activateTorrent(infoHash);
+      }
+
+      this.emit('torrent:manually_resumed', { infoHash, name: torrent.meta.name });
+      logger.info({ name: torrent.meta.name }, 'Torrent manually resumed');
+      return true;
+    }
+
+    return false;
   }
 
   /**
