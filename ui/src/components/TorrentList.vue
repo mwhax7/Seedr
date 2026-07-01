@@ -20,6 +20,9 @@ const showFileName = computed(() => store.config?.showFileName ?? true);
 const collapsedGroups = reactive(new Set<string>());
 
 const search = ref('');
+const confirmingRemove = ref<string | null>(null);
+const pendingActions = reactive(new Map<string, string>()); // hash -> action type
+let confirmTimer: ReturnType<typeof setTimeout> | undefined;
 
 function toggleSort(field: SortField) {
   if (sortField.value === field) {
@@ -44,17 +47,10 @@ function trackerHost(url: string): string {
   try { return new URL(url).hostname; } catch { return url || 'Unknown'; }
 }
 
-/**
- * Derive a human-friendly tracker name from the hostname.
- * e.g. "tracker.scenetime.com" → "Scenetime", "flacsfor.me" → "Flacsfor"
- */
 function trackerName(hostname: string): string {
-  // Remove common prefixes
   const stripped = hostname.replace(/^(tracker[0-9]*|announce|tr|www)\./, '');
-  // Take the domain name part (before TLD)
   const parts = stripped.split('.');
   const name = parts.length >= 2 ? parts[parts.length - 2]! : parts[0]!;
-  // Title-case
   return name.charAt(0).toUpperCase() + name.slice(1);
 }
 
@@ -86,15 +82,12 @@ const groupedTorrents = computed(() => {
 
 function sortIndicator(field: SortField): string {
   if (sortField.value !== field) return '';
-  return sortDir.value === 'asc' ? ' \u25B2' : ' \u25BC';
+  return sortDir.value === 'asc' ? ' ▲' : ' ▼';
 }
 
-function torrentStatus(torrent: { active: boolean; seeding: boolean; completed: boolean; lastFailureTransient: boolean; consecutiveFailures: number; seeders: number; leechers: number }): { label: string; class: string } {
+function torrentStatus(torrent: { active: boolean; seeding: boolean; completed: boolean; lastFailureTransient: boolean; consecutiveFailures: number; seeders: number; leechers: number }) {
   return getTorrentStatusBadge(torrent, store.status?.running, store.isTorrentEligible(torrent as any));
 }
-
-const confirmingRemove = ref<string | null>(null);
-let confirmTimer: ReturnType<typeof setTimeout> | undefined;
 
 function remove(infoHash: string) {
   if (confirmingRemove.value === infoHash) {
@@ -110,6 +103,42 @@ function remove(infoHash: string) {
 
 async function announce(infoHash: string) {
   await store.forceAnnounce(infoHash);
+}
+
+async function pauseTorrent(infoHash: string) {
+  pendingActions.set(infoHash, 'pause');
+  try {
+    await store.pauseTorrent(infoHash);
+  } finally {
+    pendingActions.delete(infoHash);
+  }
+}
+
+async function resumeTorrent(infoHash: string) {
+  pendingActions.set(infoHash, 'resume');
+  try {
+    await store.resumeTorrent(infoHash);
+  } finally {
+    pendingActions.delete(infoHash);
+  }
+}
+
+async function markCompleted(infoHash: string) {
+  pendingActions.set(infoHash, 'mark-complete');
+  try {
+    await store.markTorrentCompleted(infoHash);
+  } finally {
+    pendingActions.delete(infoHash);
+  }
+}
+
+async function unmarkCompleted(infoHash: string) {
+  pendingActions.set(infoHash, 'unmark-complete');
+  try {
+    await store.unmarkTorrentCompleted(infoHash);
+  } finally {
+    pendingActions.delete(infoHash);
+  }
 }
 </script>
 
@@ -157,14 +186,14 @@ async function announce(infoHash: string) {
           @click="toggleCollapse(group.host)"
         >
           <div class="flex items-center gap-2 text-xs text-gray-400">
-            <span class="text-gray-600 text-xs transition-transform duration-200" :class="collapsedGroups.has(group.host) ? '' : 'rotate-90'">&#9654;</span>
+            <span class="text-gray-600 text-xs transition-transform duration-200" :class="collapsedGroups.has(group.host) ? '' : 'rotate-90'">▶</span>
             <span class="font-medium text-gray-300">{{ group.name }}</span>
             <span class="text-gray-600">{{ group.host }}</span>
           </div>
           <span class="text-xs text-gray-600">{{ group.torrents.length }}</span>
         </div>
 
-        <!-- Animated torrent cards -->
+        <!-- Torrent cards -->
         <div
           class="grid transition-[grid-template-rows] duration-200 ease-out"
           :class="collapsedGroups.has(group.host) ? 'grid-rows-[0fr]' : 'grid-rows-[1fr]'"
@@ -189,38 +218,83 @@ async function announce(infoHash: string) {
                 </span>
               </div>
 
-              <!-- Row 2: Stats + Actions -->
-              <div class="flex flex-wrap items-center justify-between mt-1.5 gap-y-1.5">
-                <div class="flex items-center flex-wrap gap-x-3 gap-y-1 text-[0.8rem] text-gray-500">
-                  <span>{{ formatBytes(torrent.size) }}</span>
-                  <span v-if="torrent.seeding || torrent.completed">
-                    <span class="text-emerald-400">S:{{ torrent.seeders }}</span>
-                    <span class="mx-1">/</span>
-                    <span class="text-amber-400">L:{{ torrent.leechers }}</span>
-                  </span>
-                  <span v-else class="text-gray-600">S:-- / L:--</span>
-                  <span class="text-blue-400">{{ torrent.seeding && !torrent.completed ? formatSpeed(torrent.uploadRate || 0) : '--' }}</span>
-                  <span title="Local simulated upload">Local: {{ formatBytes(torrent.uploaded) }}</span>
-                  <span class="hidden sm:inline text-gray-600" title="Reported to tracker">Reported: {{ formatBytes(torrent.reportedUploaded) }}</span>
-                </div>
-                <div class="flex items-center gap-2 shrink-0">
-                  <button
-                    v-if="torrent.active && store.status?.running"
-                    @click="announce(torrent.infoHash)"
-                    class="text-xs text-gray-500 hover:text-blue-400 bg-blue-500/5 hover:bg-blue-500/10 border border-blue-500/10 hover:border-blue-500/20 px-2.5 py-1 rounded-lg transition-all"
-                  >
-                    <span class="hidden sm:inline">Force </span>Announce
-                  </button>
-                  <button
-                    @click="remove(torrent.infoHash)"
-                    class="text-xs px-2.5 py-1 rounded-lg transition-all"
-                    :class="confirmingRemove === torrent.infoHash
-                      ? 'text-red-400 bg-red-500/20 border border-red-500/40'
-                      : 'text-gray-500 hover:text-red-400 bg-red-500/5 hover:bg-red-500/10 border border-red-500/10 hover:border-red-500/20'"
-                  >
-                    {{ confirmingRemove === torrent.infoHash ? 'Confirm?' : 'Remove' }}
-                  </button>
-                </div>
+              <!-- Row 2: Stats -->
+              <div class="flex flex-wrap items-center gap-x-3 gap-y-1 mt-1.5 text-[0.8rem] text-gray-500">
+                <span>{{ formatBytes(torrent.size) }}</span>
+                <span v-if="torrent.seeding || torrent.completed">
+                  <span class="text-emerald-400">S:{{ torrent.seeders }}</span>
+                  <span class="mx-1">/</span>
+                  <span class="text-amber-400">L:{{ torrent.leechers }}</span>
+                </span>
+                <span v-else class="text-gray-600">S:-- / L:--</span>
+                <span class="text-blue-400">{{ torrent.seeding && !torrent.completed ? formatSpeed(torrent.uploadRate || 0) : '--' }}</span>
+                <span title="Local simulated upload">Local: {{ formatBytes(torrent.uploaded) }}</span>
+                <span class="hidden sm:inline text-gray-600" title="Reported to tracker">Reported: {{ formatBytes(torrent.reportedUploaded) }}</span>
+              </div>
+
+              <!-- Row 3: Action buttons -->
+              <div class="flex flex-wrap items-center gap-2 mt-2 shrink-0">
+                <!-- Announce button -->
+                <button
+                  v-if="torrent.active && store.status?.running"
+                  @click="announce(torrent.infoHash)"
+                  :disabled="pendingActions.has(torrent.infoHash)"
+                  class="text-xs text-gray-500 hover:text-blue-400 disabled:opacity-50 bg-blue-500/5 hover:bg-blue-500/10 border border-blue-500/10 hover:border-blue-500/20 px-2.5 py-1 rounded-lg transition-all"
+                >
+                  <span class="hidden sm:inline">Force </span>Announce
+                </button>
+
+                <!-- Pause / Resume buttons -->
+                <button
+                  v-if="torrent.active && !torrent.completed && store.status?.running"
+                  @click="pauseTorrent(torrent.infoHash)"
+                  :disabled="pendingActions.has(torrent.infoHash)"
+                  class="text-xs text-gray-500 hover:text-amber-400 disabled:opacity-50 bg-amber-500/5 hover:bg-amber-500/10 border border-amber-500/10 hover:border-amber-500/20 px-2.5 py-1 rounded-lg transition-all"
+                  title="Pause this torrent"
+                >
+                  <span class="hidden sm:inline">⏸ </span>Pause
+                </button>
+                <button
+                  v-else-if="!torrent.active && !torrent.completed && store.status?.running"
+                  @click="resumeTorrent(torrent.infoHash)"
+                  :disabled="pendingActions.has(torrent.infoHash)"
+                  class="text-xs text-gray-500 hover:text-emerald-400 disabled:opacity-50 bg-emerald-500/5 hover:bg-emerald-500/10 border border-emerald-500/10 hover:border-emerald-500/20 px-2.5 py-1 rounded-lg transition-all"
+                  title="Resume this torrent"
+                >
+                  <span class="hidden sm:inline">▶ </span>Resume
+                </button>
+
+                <!-- Mark Complete / Unmark buttons -->
+                <button
+                  v-if="!torrent.completed && store.status?.running"
+                  @click="markCompleted(torrent.infoHash)"
+                  :disabled="pendingActions.has(torrent.infoHash)"
+                  class="text-xs text-gray-500 hover:text-cyan-400 disabled:opacity-50 bg-cyan-500/5 hover:bg-cyan-500/10 border border-cyan-500/10 hover:border-cyan-500/20 px-2.5 py-1 rounded-lg transition-all"
+                  title="Mark as completed and stop reporting"
+                >
+                  <span class="hidden sm:inline">✓ </span>Done
+                </button>
+                <button
+                  v-else-if="torrent.completed && store.status?.running"
+                  @click="unmarkCompleted(torrent.infoHash)"
+                  :disabled="pendingActions.has(torrent.infoHash)"
+                  class="text-xs text-gray-500 hover:text-cyan-400 disabled:opacity-50 bg-cyan-500/5 hover:bg-cyan-500/10 border border-cyan-500/10 hover:border-cyan-500/20 px-2.5 py-1 rounded-lg transition-all"
+                  title="Unmark as completed and resume seeding"
+                >
+                  <span class="hidden sm:inline">↻ </span>Resume
+                </button>
+
+                <!-- Remove button -->
+                <button
+                  @click="remove(torrent.infoHash)"
+                  :disabled="pendingActions.has(torrent.infoHash)"
+                  class="text-xs px-2.5 py-1 rounded-lg transition-all disabled:opacity-50"
+                  :class="confirmingRemove === torrent.infoHash
+                    ? 'text-red-400 bg-red-500/20 border border-red-500/40'
+                    : 'text-gray-500 hover:text-red-400 bg-red-500/5 hover:bg-red-500/10 border border-red-500/10 hover:border-red-500/20'"
+                >
+                  {{ confirmingRemove === torrent.infoHash ? 'Confirm?' : 'Remove' }}
+                </button>
               </div>
             </div>
           </div>

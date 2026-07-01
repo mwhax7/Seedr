@@ -14,11 +14,12 @@ interface TorrentInfo {
   active: boolean;
   seeding: boolean;
   completed: boolean;
+  completionReason?: 'ratio_reached' | 'manual';
   lastFailureTransient: boolean;
   tracker: string;
   uploadRate?: number;
   consecutiveFailures: number;
-  addedIndex: number; // insertion order from backend
+  addedIndex: number;
 }
 
 interface AppConfig {
@@ -109,6 +110,7 @@ export const useSeedrStore = defineStore('seedr', () => {
         active: t.active,
         seeding: t.seeding || false,
         completed: t.completed || false,
+        completionReason: t.completionReason,
         lastFailureTransient: t.lastFailureTransient || false,
         tracker: t.currentTracker || '',
         uploadRate: t.uploadRate || 0,
@@ -128,13 +130,29 @@ export const useSeedrStore = defineStore('seedr', () => {
   socket.on('announce:failure', (data: any) => addEvent('announce:failure', data));
   socket.on('torrent:added', (data: any) => {
     addEvent('torrent:added', data);
-    fetchTorrents(); // Refresh torrent list when a new torrent is detected
+    fetchTorrents();
   });
   socket.on('torrent:removed', (data: any) => {
     addEvent('torrent:removed', data);
-    fetchTorrents(); // Refresh torrent list when a torrent is removed
+    fetchTorrents();
   });
   socket.on('torrent:completed', (data: any) => addEvent('torrent:completed', data));
+  socket.on('torrent:paused', (data: any) => {
+    addEvent('torrent:paused', data);
+    fetchTorrents();
+  });
+  socket.on('torrent:resumed', (data: any) => {
+    addEvent('torrent:resumed', data);
+    fetchTorrents();
+  });
+  socket.on('torrent:manually_completed', (data: any) => {
+    addEvent('torrent:manually_completed', data);
+    fetchTorrents();
+  });
+  socket.on('torrent:manually_resumed', (data: any) => {
+    addEvent('torrent:manually_resumed', data);
+    fetchTorrents();
+  });
 
   socket.on('stopped', () => {
     addEvent('stopped', {});
@@ -235,6 +253,50 @@ export const useSeedrStore = defineStore('seedr', () => {
     }
   }
 
+  async function pauseTorrent(infoHash: string) {
+    try {
+      const res = await fetch(`/api/torrents/${infoHash}/pause`, { method: 'POST' });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      await fetchTorrents();
+    } catch (e) {
+      console.error('Failed to pause torrent:', e);
+      await fetchTorrents();
+    }
+  }
+
+  async function resumeTorrent(infoHash: string) {
+    try {
+      const res = await fetch(`/api/torrents/${infoHash}/resume`, { method: 'POST' });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      await fetchTorrents();
+    } catch (e) {
+      console.error('Failed to resume torrent:', e);
+      await fetchTorrents();
+    }
+  }
+
+  async function markTorrentCompleted(infoHash: string) {
+    try {
+      const res = await fetch(`/api/torrents/${infoHash}/mark-completed`, { method: 'POST' });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      await fetchTorrents();
+    } catch (e) {
+      console.error('Failed to mark torrent as completed:', e);
+      await fetchTorrents();
+    }
+  }
+
+  async function unmarkTorrentCompleted(infoHash: string) {
+    try {
+      const res = await fetch(`/api/torrents/${infoHash}/unmark-completed`, { method: 'POST' });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      await fetchTorrents();
+    } catch (e) {
+      console.error('Failed to unmark torrent as completed:', e);
+      await fetchTorrents();
+    }
+  }
+
   async function startSeeding() {
     actionPending.value = true;
     try {
@@ -255,7 +317,7 @@ export const useSeedrStore = defineStore('seedr', () => {
 
   function isTorrentEligible(t: TorrentInfo): boolean {
     const cfg = config.value;
-    if (!cfg) return true; // Config not loaded yet — assume eligible
+    if (!cfg) return true;
     if (t.completed) return false;
     if (cfg.skipIfNoPeers && t.seeders + t.leechers === 0) return false;
     if (!cfg.keepTorrentWithZeroLeechers && t.leechers === 0) return false;
@@ -319,6 +381,10 @@ export const useSeedrStore = defineStore('seedr', () => {
     uploadTorrent,
     forceAnnounce,
     removeTorrent,
+    pauseTorrent,
+    resumeTorrent,
+    markTorrentCompleted,
+    unmarkTorrentCompleted,
     startSeeding,
     stopSeeding,
     checkPort,
