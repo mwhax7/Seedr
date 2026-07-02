@@ -293,7 +293,7 @@ async function unmarkCompleted(infoHash: string) {
                     ? 'text-red-400 bg-red-500/20 border border-red-500/40'
                     : 'text-gray-500 hover:text-red-400 bg-red-500/5 hover:bg-red-500/10 border border-red-500/10 hover:border-red-500/20'"
                 >
-                  <span class="hidden sm:inline">✕ </span>Done
+                  <span class="hidden sm:inline">✕ </span>
                   {{ confirmingRemove === torrent.infoHash ? 'Confirm?' : 'Remove' }}
                 </button>
               </div>
