@@ -241,7 +241,7 @@ async function unmarkCompleted(infoHash: string) {
                   :disabled="pendingActions.has(torrent.infoHash)"
                   class="text-xs text-gray-500 hover:text-blue-400 disabled:opacity-50 bg-blue-500/5 hover:bg-blue-500/10 border border-blue-500/10 hover:border-blue-500/20 px-2.5 py-1 rounded-lg transition-all"
                 >
-                  <span class="hidden sm:inline">Force </span>Announce
+                  <span class="hidden sm:inline">⯈ </span>Force Announce
                 </button>
 
                 <!-- Pause / Resume buttons -->
@@ -252,7 +252,7 @@ async function unmarkCompleted(infoHash: string) {
                   class="text-xs text-gray-500 hover:text-amber-400 disabled:opacity-50 bg-amber-500/5 hover:bg-amber-500/10 border border-amber-500/10 hover:border-amber-500/20 px-2.5 py-1 rounded-lg transition-all"
                   title="Pause this torrent"
                 >
-                  <span class="hidden sm:inline">⏸ </span>Pause
+                  <span class="hidden sm:inline">II </span>Pause
                 </button>
                 <button
                   v-else-if="!torrent.active && !torrent.completed && store.status?.running"
@@ -261,12 +261,12 @@ async function unmarkCompleted(infoHash: string) {
                   class="text-xs text-gray-500 hover:text-emerald-400 disabled:opacity-50 bg-emerald-500/5 hover:bg-emerald-500/10 border border-emerald-500/10 hover:border-emerald-500/20 px-2.5 py-1 rounded-lg transition-all"
                   title="Resume this torrent"
                 >
-                  <span class="hidden sm:inline">▶ </span>Resume
+                  <span class="hidden sm:inline">▶︎ </span>Resume
                 </button>
 
                 <!-- Mark Complete / Unmark buttons -->
                 <button
-                  v-if="!torrent.completed && store.status?.running"
+                  v-if="!torrent.completed && store.status?.running"ç)à
                   @click="markCompleted(torrent.infoHash)"
                   :disabled="pendingActions.has(torrent.infoHash)"
                   class="text-xs text-gray-500 hover:text-cyan-400 disabled:opacity-50 bg-cyan-500/5 hover:bg-cyan-500/10 border border-cyan-500/10 hover:border-cyan-500/20 px-2.5 py-1 rounded-lg transition-all"
@@ -293,6 +293,7 @@ async function unmarkCompleted(infoHash: string) {
                     ? 'text-red-400 bg-red-500/20 border border-red-500/40'
                     : 'text-gray-500 hover:text-red-400 bg-red-500/5 hover:bg-red-500/10 border border-red-500/10 hover:border-red-500/20'"
                 >
+                  <span class="hidden sm:inline">✕ </span>Done
                   {{ confirmingRemove === torrent.infoHash ? 'Confirm?' : 'Remove' }}
                 </button>
               </div>

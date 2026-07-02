@@ -1033,21 +1033,32 @@ export class SeedManager extends EventEmitter {
     const torrent = this.torrents.get(infoHash);
     if (!torrent) return false;
 
-    if (torrent.completed && torrent.completionReason === 'manual') {
-      torrent.completed = false;
-      torrent.completionReason = undefined;
-
-      // Reactivate the torrent
-      if (!torrent.active) {
-        this.activateTorrent(infoHash);
-      }
-
-      this.emit('torrent:manually_resumed', { infoHash, name: torrent.meta.name });
-      logger.info({ name: torrent.meta.name }, 'Torrent manually resumed');
-      return true;
+    if (!torrent.completed) {
+      return false;
     }
 
-    return false;
+    // Allow resuming torrents completed manually or by ratio target.
+    torrent.completed = false;
+    torrent.completionReason = undefined;
+
+    // Reactivate only if a slot is available.
+    if (
+      !torrent.active &&
+      (
+        this.config.simultaneousSeed === -1 ||
+        this.getSlotOccupyingTorrents().length < this.config.simultaneousSeed
+      )
+    ) {
+      this.activateTorrent(infoHash);
+    }
+
+    this.bandwidth.updateTorrent(infoHash, {
+      eligible: this.isTorrentEligible(torrent),
+    });
+
+    this.emit('torrent:manually_resumed', { infoHash, name: torrent.meta.name });
+    logger.info({ name: torrent.meta.name }, 'Torrent resumed from completed state');
+    return true;
   }
 
   /**
