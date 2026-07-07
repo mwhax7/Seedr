@@ -8,6 +8,27 @@ Inspired by [JOAL](https://github.com/anthonyraymond/joal), built from scratch w
 
 ![screenshot](assets/screenshot.jpg)
 
+> 🚧 This fork is currently under development. A first release will be published once everything is polished, tested, and ready.
+
+> ⬇️ See the upcoming changes below:
+
+## Fork additions & improvements ✅
+
+### Sorting & controls (Done / Pause / Resume)
+
+![screenshot](https://i.imgur.com/CwHilI6.gif)
+
+### Additional torrent clients
+
+![screenshot](https://i.imgur.com/3stjdJD.png)
+
+### Fixes / Improvements:
+- Fixed a bug causing torrents to not stop after reaching the target ratio
+- Removed the "Force Announce" button
+- Added additional sorting options
+- Added Pause/Resume support
+- Added support for more torrent clients
+
 ## How It Works
 
 Seedr loads `.torrent` files, connects to their trackers, and announces simulated upload data - without actually downloading or uploading any content. It emulates real BitTorrent clients (qBittorrent, Deluge, Transmission, uTorrent, BitTorrent) by replicating their exact announce behavior: peer IDs, key generation, URL encoding, headers, and query parameter ordering.
